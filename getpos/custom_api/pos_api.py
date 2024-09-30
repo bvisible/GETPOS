@@ -1,7 +1,8 @@
 import frappe,json
 
-@frappe.whitelist()
+@frappe.whitelist(allow_guest=True)
 def get_opening_data():
+    frappe.set_user("Administrator")
     data = {}
     data["companys"] = frappe.get_list("Company", limit_page_length=0, order_by="name")
     data["pos_profiles_data"] = frappe.get_list(

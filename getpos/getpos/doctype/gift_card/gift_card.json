@@ -1,7 +1,8 @@
 {
  "actions": [],
  "allow_rename": 1,
- "creation": "2024-07-11 11:11:13.860270",
+ "creation": "2024-07-26 14:37:46.535732",
+ "default_view": "List",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -20,6 +21,7 @@
   "is_journal_entry",
   "column_break_vxje",
   "description",
+  "amended_from",
   "amended_from"
  ],
  "fields": [
@@ -58,6 +60,13 @@
    "unique": 1
   },
   {
+   "fieldname": "gift_card_type",
+   "fieldtype": "Select",
+   "label": "Gift Card Type",
+   "options": "\nPaid\nFree",
+   "reqd": 1
+  },
+  {
    "fieldname": "validity_section",
    "fieldtype": "Section Break",
    "label": "Validity"
@@ -76,32 +85,11 @@
    "reqd": 1
   },
   {
-   "fieldname": "column_break_vxje",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "discount_amount",
    "fieldtype": "Currency",
    "label": "Discount Amount",
    "non_negative": 1,
    "reqd": 1
-  },
-  {
-   "fieldname": "gift_card_type",
-   "fieldtype": "Select",
-   "label": "Gift Card Type",
-   "options": "\nPaid\nFree",
-   "reqd": 1
-  },
-  {
-   "fieldname": "amended_from",
-   "fieldtype": "Link",
-   "label": "Amended From",
-   "no_copy": 1,
-   "options": "Gift Card",
-   "print_hide": 1,
-   "read_only": 1,
-   "search_index": 1
   },
   {
    "allow_on_submit": 1,
@@ -118,22 +106,46 @@
    "read_only": 1
   },
   {
-   "fieldname": "description",
-   "fieldtype": "Text Editor",
-   "label": "Description"
-  },
-  {
    "default": "0",
    "fieldname": "is_journal_entry",
    "fieldtype": "Check",
    "label": "Is Journal Entry",
    "read_only": 1
+  },
+  {
+   "fieldname": "column_break_vxje",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text Editor",
+   "label": "Description"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Gift Card",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Gift Card",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2024-07-15 17:53:53.688457",
+ "modified": "2024-07-26 14:37:46.535732",
  "modified_by": "Administrator",
  "module": "getpos",
  "name": "Gift Card",

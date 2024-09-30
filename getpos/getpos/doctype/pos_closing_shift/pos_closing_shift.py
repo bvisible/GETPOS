@@ -90,6 +90,7 @@ def get_pos_invoices(pos_opening_shift):
 
 @frappe.whitelist()
 def make_closing_shift_from_opening(opening_shift):
+    res = frappe._dict()
     if isinstance(opening_shift, str):
         opening_shift = json.loads(opening_shift)
     submit_printed_invoices(opening_shift.get("name"))
@@ -162,7 +163,7 @@ def make_closing_shift_from_opening(opening_shift):
     closing_shift.set("pos_transactions", pos_transactions)
     closing_shift.set("payment_reconciliation", payments)
     closing_shift.set("taxes", taxes)
-
+    
     return closing_shift
 
 
@@ -176,6 +177,36 @@ def submit_closing_shift(closing_shift):
     closing_shift_doc.submit()
     return closing_shift_doc.name
 
+@frappe.whitelist()
+def get_shift_details(opening_shift):
+    res = frappe._dict()
+    closing_balance = frappe.db.sql(
+            """SELECT   
+            IFNULL(SUM(CASE WHEN si.is_return = 0 THEN si.grand_total ELSE 0 END),0) AS sales_order_amount,
+            IFNULL(SUM(CASE WHEN si.is_return = 1 THEN si.grand_total ELSE 0 END),0) AS return_order_amount,
+            IFNULL(SUM(CASE WHEN si.is_return = 0 and si.mode_of_payment="Cash" THEN si.grand_total ELSE 0 END),0) AS cash_collected,
+            IFNULL(SUM(CASE WHEN si.is_return = 0 and si.mode_of_payment="Credit" THEN si.grand_total ELSE 0 END),0) AS credit_collected,
+            IFNULL(SUM(CASE WHEN si.is_return = 0 THEN si.grand_total ELSE 0 END) - SUM(CASE WHEN si.is_return = 1 THEN si.grand_total ELSE 0 END),0) AS total_sales_order_amount
+        FROM
+            `tabPOS Opening Shift` pos
+            LEFT JOIN `tabSales Invoice` si ON pos.name = si.posa_pos_opening_shift
+            LEFT JOIN `tabSales Invoice Payment` sip ON si.name = sip.parent
+            LEFT JOIN `tabPOS Opening Shift Detail` posd ON pos.name = posd.parent
+        WHERE          
+             pos.name=%s""",
+            (opening_shift.get("name")), as_dict=True
+        )
+    
+    res['opening_balance']=frappe.get_list(
+        "POS Opening Shift Detail",
+        filters={"parent": ["in", opening_shift.get("name")]},
+        fields=["mode_of_payment","amount"],
+        limit_page_length=0,
+        order_by="parent",
+        ignore_permissions=True
+    )
+    res['Shift_Detail']=closing_balance
+    return res
 
 def submit_printed_invoices(pos_opening_shift):
     invoices_list = frappe.get_all("Sales Invoice", filters={

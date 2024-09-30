@@ -9,9 +9,13 @@
  "field_order": [
   "order_id",
   "type",
+  "custom_order_request",
   "column_break_izzg9",
   "estimated_time",
-  "status"
+  "status",
+  "creation1",
+  "source",
+  "cost_center"
  ],
  "fields": [
   {
@@ -39,11 +43,32 @@
   {
    "fieldname": "column_break_izzg9",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "creation1",
+   "fieldtype": "Datetime",
+   "label": "Creation"
+  },
+  {
+   "fieldname": "custom_order_request",
+   "fieldtype": "Small Text",
+   "label": "Order Request"
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "label": "Source"
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-04-25 18:49:39.277140",
+ "modified": "2024-08-03 13:13:33.561592",
  "modified_by": "Administrator",
  "module": "getpos",
  "name": "Kitchen-Kds",

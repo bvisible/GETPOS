@@ -19,9 +19,9 @@ fixtures = [
 			"name": (
 				"in",
 				(
-					"Sales Order Item-associated_item",
-                    "Sales Invoice-hub_manager",
-                    "Sales Order-hub_manager"
+                    "Cost Center-custom_attach_image",
+                    "Cost Center-custom_address",
+                    "Cost Center-custom_location"
 				)
 			)
 		}
@@ -38,10 +38,21 @@ fixtures = [
 			)
 		}
 	},
+  
+   {
+        "dt": "Web Page",
+        "filters": {
+            "name": [
+                "in",
+                [
+                    "payment-process" 
+                ]
+            ]
+        }
+    }
 ]
-web_include_css = ["/assets/getpos/css/getpos.css"]
 # include js, css files in header of desk.html
-# app_include_css = "/assets/nbpos/css/nbpos.css"
+# app_include_css = "/assets/getpos/css/nbpos.css"
 app_include_js = "/assets/getpos/js/nbpos.js"
 
 # include js, css files in header of web template
@@ -65,9 +76,12 @@ doctype_js = {
 	"Warehouse": "public/js/doctype_js/warehouse.js",
 	"Account": "public/js/doctype_js/account.js",
 	"Customer": "public/js/doctype_js/customer.js",
+    "Cost Center": "public/js/doctype_js/cost_center.js",
 	"Item": "public/js/doctype_js/item.js",
     "Pricing Rule" : "public/js/doctype_js/pricing_rule.js",
     "Email Template" : "public/js/doctype_js/email_template.js",
+
+
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
@@ -119,38 +133,41 @@ doctype_js = {
 # ---------------
 # Override standard doctype classes
 
+# override_doctype_class = {
+# 	"ToDo": "custom_app.overrides.CustomToDo"
+# }
 override_doctype_class = {
 	"Sales Invoice": "getpos.overrides.sales_invoice.Custom"
 }
 
+
 # Document Events
 # ---------------
 # Hook on document methods and events
-doc_events = {
-	# "Warehouse": {
-	# 	"validate": "getpos.getpos.hooks.warehouse.validate_hub_manager"
-	# },
-	"Customer" : {
-		"validate" : "getpos.getpos.hooks.customer.validate"
-	},
-	"Sales Order":{
-		# "on_submit": "getpos.getpos.hooks.sales_order.on_submit",
+doc_events = {	
+	"Sales Order":{		
 		"validate": "getpos.getpos.hooks.sales_order.validate"
-	},
-	# "Sales Invoice":{
-	# 	"on_submit": "getpos.getpos.hooks.sales_invoice.on_submit"
-	# },   
+	},	
 	"Item Price":{
 		"validate": "getpos.getpos.hooks.item_price.validate_item_price"
 	},
     "Version":{
         "after_insert": "getpos.getpos.hooks.version.after_insert"
-	}, 
-    "Cost Center" : {
-		"after_insert" : "getpos.getpos.hooks.cost_center.create_warehouse"
+	},   
+	"Item Group" : {
+		"before_insert" : "getpos.getpos.hooks.item_group.item_group_length"
+	},
+	"Global Defaults" : {
+		"on_update" : "getpos.getpos.hooks.global_defaults.update_theme_settings"
+	},
+    "Item" : {
+		"validate" : "getpos.getpos.hooks.item.validate_item"
 	},
 	
 }
+
+
+after_request = "getpos.getpos.api.after_request"
 # doc_events = {
 # 	"*": {
 # 		"on_update": "method",
@@ -163,22 +180,22 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
-	# "all": [
-	# 	"nbpos.tasks.all"
-	# ],
+# 	"all": [
+# 		"nbpos.tasks.all"
+# 	],
 	"daily": [
-		"getpos.getpos.schedulers.expired_gift_card_settlement.create_gift_card_journal_entries"
-	]
-    # ,
-	# "hourly": [
-	# 	"nbpos.tasks.hourly"
-	# ],
-	# "weekly": [
-	# 	"nbpos.tasks.weekly"
-	# ]
-	# "monthly": [
-	# 	"nbpos.tasks.monthly"
-	# ]
+			"getpos.getpos.schedulers.expired_gift_card_settlement.create_gift_card_journal_entries",
+            "getpos.getpos.schedulers.opencart_integration.order_integration"
+		]
+# 	"hourly": [
+# 		"nbpos.tasks.hourly"
+# 	],
+# 	"weekly": [
+# 		"nbpos.tasks.weekly"
+# 	]
+# 	"monthly": [
+# 		"nbpos.tasks.monthly"
+# 	]
 }
 
 # Testing
@@ -236,6 +253,7 @@ after_migrate = "getpos.getpos.after_migrate.main"
 # 	"nbpos.auth.validate"
 # ]
 
+# no_csrf=["getpos.getpos.api.login"]
 
 
-website_route_rules = [{'from_route': '/GetPOS/<path:app_path>', 'to_route': 'GetPOS'},]
+website_route_rules = [{'from_route': '/getpos-react/<path:app_path>', 'to_route': 'getpos-react'},]

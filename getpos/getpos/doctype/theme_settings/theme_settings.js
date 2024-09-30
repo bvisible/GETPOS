@@ -15,6 +15,7 @@ frappe.ui.form.on('Theme Settings', {
 			.then(doc => {
 				frm.set_value({guest_customer: doc.message['name']})
 			})
+		
 
 	}
 });

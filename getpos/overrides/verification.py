@@ -74,10 +74,10 @@ def custom_send_login_mail(self, subject, template, add_args, now=None, custom_t
 
     frappe.sendmail(
         recipients=[self.email],
-        subject="Welcome to GET POS",
+        subject="Welcome to Kleo Cloud",
         message=message,
         delayed=False,
-        header=["Welcome to GET POS"]
+        header=["Welcome to Kleo Cloud"]
     )
 
 

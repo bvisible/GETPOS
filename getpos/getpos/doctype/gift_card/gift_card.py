@@ -1,6 +1,3 @@
-# Copyright (c) 2024, Nestorbird and contributors
-# For license information, please see license.txt
-
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -85,6 +82,3 @@ class GiftCard(Document):
 					"success_key": 0,
 					"message": str(e)
 				}
-
-
-

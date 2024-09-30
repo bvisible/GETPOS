@@ -1,25 +1,65 @@
+
 import requests
 import frappe
 import json
 from frappe import _
+import json
+from frappe.utils import cint
 STANDARD_USERS = ("Guest", "Administrator")
 from frappe.utils.pdf import get_pdf
-from frappe.core.doctype.communication.email import make
 from frappe.rate_limiter import rate_limit
 from frappe.utils.password import get_password_reset_limit
-from frappe.utils import (cint,get_formatted_email, nowdate, nowtime, flt,getdate)
+from frappe.utils import (cint,get_formatted_email, nowdate, nowtime, flt)
 from erpnext.accounts.utils import get_balance_on
 from erpnext.stock.utils import get_stock_balance
 from erpnext.stock.stock_ledger import get_previous_sle, get_stock_ledger_entries
 from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
-from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 from frappe.utils import add_to_date, now
+from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+from datetime import datetime, timedelta, time
 from erpnext.selling.doctype.customer.customer import get_customer_outstanding
-from datetime import datetime
+from getpos.controllers import frappe_response,handle_exception
+from frappe.core.doctype.user.user import check_password
+
+@frappe.whitelist( allow_guest=True,methods=["GET"] )
+def get_user_details(usr,pwd):
+    try:
+             # Check if the user is already logged in
+        login_manager = frappe.auth.LoginManager()
+        login_manager.authenticate(user=usr, pwd=pwd)
+        login_manager.post_login()
+
+        user = frappe.get_doc('User', usr)
+        
+        if user.api_key and user.api_secret:
+                user.api_secret = user.get_password('api_secret')
+        else:
+                api_generate = generate_keys(usr)     
+
+
+        frappe.response["message"] = {
+                "success_key":1,
+                "message":"success",
+                "sid":frappe.session.sid,
+                "api_key":user.api_key if user.api_key else api_generate[1],
+                "api_secret": user.api_secret if user.api_secret else api_generate[0],
+                "username":user.username,
+                "email":user.email
+        }
+    except Exception as e:
+        frappe.clear_messages()
+        frappe.local.response["message"] = {
+            "success_key":0,
+            "message":"Incorrect username or password",
+            "error":e
+        }
+        
+        return 
 
 @frappe.whitelist( allow_guest=True )
 def login(usr, pwd):
     try:
+             # Check if the user is already logged in       
         login_manager = frappe.auth.LoginManager()
         login_manager.authenticate(user=usr, pwd=pwd)
         login_manager.post_login()
@@ -118,31 +158,28 @@ def reset_password( user,send_email=False, password_expired=False):
 def password_reset_mail(user, link):
                 user.send_login_mail(("Password Reset"),
                         "password_reset", {"link": link}, now=True)
-
 @frappe.whitelist()
-def change_password(usr, old_pwd, new_pwd):
-    username = frappe.db.get_value("User", usr, 'name')
-    if username:
-        user_doc = frappe.get_doc("User", usr)
-        if frappe.local.login_manager.check_password(user_doc.name, old_pwd):
-            user_doc.new_password = new_pwd
-            user_doc.save()
-            frappe.db.commit()
+def change_password(usr,new_pwd,old_pwd):
+    try:
+        user=frappe.get_doc("User",usr)
+        
+        if check_password(user.name,old_pwd, delete_tracker_cache=False):
+            user.new_password = new_pwd
+            user.flags.ignore_password_policy = True
+            user.save()
+            frappe.clear_messages()
             frappe.local.response["message"] = {
                 "success_key": 1,
                 "message": "Password changed successfully"
             }
-        else:
-            frappe.local.response["message"] = {
-                "success_key": 0,
-                "message": "Old password is incorrect"
-            }
-    else:
+            frappe.local.response["http_status_code"] = 200
+    except Exception as e:
+        frappe.clear_messages()
         frappe.local.response["message"] = {
             "success_key": 0,
-            "message": "User not found"
+            "message": "Please enter valid password"
         }
-
+        frappe.local.response["http_status_code"] = 403  
 @frappe.whitelist( allow_guest=True )                
 def send_login_mail(user, subject, template, add_args, now=None):
                 """send mail with login details"""
@@ -423,21 +460,27 @@ def add_items_in_order(sales_order, items, order_list):
                 sales_order.append("items", {
                         "item_code": item.get("item_code"),
                         "qty": item.get("qty"),
-                        "rate": item.get("rate"),                        
-                        "item_tax_template": item_tax_template if item_tax_template else ""                
+                        "rate": item.get("rate"), 
+                        "discount_percentage":100 if item.get("rate")==0 else 0,  
+                        "custom_parent_item":item.get("custom_parent_item"),
+                        "custom_is_attribute_item":item.get("custom_is_attribute_item"),
+                        "custom_is_combo_item":item.get("custom_is_combo_item"),
+                        "allow_zero_evaluation_rate":item.get("allow_zero_evaluation_rate"),                    
+                        "item_tax_template": item_tax_template if item_tax_template else "" ,
+                        "custom_ca_id":item.get("custom_ca_id")                
                 })
 
-                if item.get("sub_items"):
-                        for extra_item in item.get("sub_items"):
-                              if extra_item.get('tax'):
-                                     extra_item_tax_template = extra_item.get('tax')[0].get('item_tax_template')
-                              sales_order.append("items", {
-                                "item_code": extra_item.get("item_code"),
-                                "qty": extra_item.get("qty"),
-                                "rate": extra_item.get("rate"),
-                                "associated_item": item.get('item_code'),
-                                "item_tax_template": extra_item_tax_template if extra_item_tax_template else "" 
-                               })
+                # if item.get("sub_items"):
+                #         for extra_item in item.get("sub_items"):
+                #               if extra_item.get('tax'):
+                #                      extra_item_tax_template = extra_item.get('tax')[0].get('item_tax_template')
+                #               sales_order.append("items", {
+                #                 "item_code": extra_item.get("item_code"),
+                #                 "qty": extra_item.get("qty"),
+                #                 "rate": extra_item.get("rate"),
+                #                 "associated_item": item.get('item_code'),
+                #                 "item_tax_template": extra_item_tax_template if extra_item_tax_template else "" 
+                #                })
         
         for key,value in sales_taxes.items():
                sales_order.append("taxes", {"charge_type": "On Net Total", "account_head": key, "tax_amount": value, "description": key, })
@@ -504,10 +547,9 @@ def get_sales_order_list(hub_manager = None, page_no = 1, from_date = None, to_d
         conditions = ""
         if mobile_no:
                 conditions += f" and s.contact_mobile like '%{str(mobile_no).strip()}%'"
-                
         if name:
                 conditions += f" and s.customer_name like '%{str(name).strip()}%'"
-       
+        
         if from_date:
                 conditions += " and s.transaction_date between {} and {} order by s.creation desc".format(frappe.db.escape(from_date), frappe.db.escape(to_date))
         else:
@@ -532,7 +574,7 @@ def get_sales_order_list(hub_manager = None, page_no = 1, from_date = None, to_d
                         s.custom_return_order_status as return_order_status,
                         CASE WHEN s.coupon_code = null THEN '' ELSE (select coupon_type from `tabCoupon Code` co where co.name=s.coupon_code) END  as coupon_type,
                         CASE WHEN s.coupon_code = null THEN '' ELSE (select coupon_code from `tabCoupon Code` co where co.name=s.coupon_code) END  as coupon_code,
-                        s.custom_gift_card_code as gift_card_code 
+                        s.custom_gift_card_code as gift_card_code           
                 FROM `tabSales Order` s, `tabUser` u, `tabCustomer` c
                 WHERE s.hub_manager = u.name and s.customer = c.name 
                         and s.hub_manager = {hub_manager}  and s.docstatus = 1 
@@ -570,7 +612,11 @@ def get_sales_order_list(hub_manager = None, page_no = 1, from_date = None, to_d
                                 item_detail["combo_items"] = list(filter( lambda x: x.get("parent_item") == item_detail.item_code , combo_items )) 
                                 
                 item['items'] = new_item_details
-        
+                tax_details = frappe.db.sql("""SELECT st.charge_type, st.account_head, st.tax_amount, st.description, st.rate 
+                                   FROM `tabSales Order` s, `tabSales Taxes and Charges` st 
+                                   WHERE st.parent = %s and st.parenttype = 'Sales Order' """,
+                                   (item.name,), as_dict=True)
+                item['tax_detail'] = tax_details
         if mobile_no:
                 conditions += f" and s.contact_mobile like '%{str(mobile_no).strip()}%'"
 
@@ -713,7 +759,7 @@ def get_customer(mobile_no=None, name=None):
 
         try:
             # Fetch the customer document
-            customer = frappe.get_doc('Customer', name)
+            customer = frappe.get_doc('Customer', customer_detail[0].name)
             credit_limit=customer.custom_credit_limit    
          
 
@@ -744,17 +790,18 @@ def get_customer(mobile_no=None, name=None):
         res["message"] = "Mobile Number/Customer Does Not Exist"
         return res
 
+
 @frappe.whitelist()
 def get_all_customer(search=None, from_date=None):
     res=frappe._dict()
     customer = frappe.qb.DocType('Customer')
     if search:
-        query = """SELECT name, customer_name, mobile_no, email_id ,loyalty_program
+        query = """SELECT name, customer_name, mobile_no, email_id
         FROM `tabCustomer`
         WHERE disabled = 0 AND mobile_no LIKE %s"""
         params = ("%"+search+"%",)
     else:
-        query = """SELECT name, customer_name, mobile_no, email_id ,loyalty_program
+        query = """SELECT name, customer_name, mobile_no, email_id
         FROM `tabCustomer`
         WHERE disabled = 0 """
         params = ()
@@ -829,53 +876,64 @@ def get_sub_items(name):
         else:
                 return ""
 
-             
-        
-                
-        
+ 
+@frappe.whitelist(allow_guest=True)
+def get_web_theme_settings():
+    theme_settings = frappe.get_doc("Web Theme Settings")
+    theme_settings_dict = {}
+    theme = frappe.get_meta("Web Theme Settings")
+    
+    nbpos_setting = frappe.get_doc("nbpos Setting")
+    instance_url = nbpos_setting.base_url
 
-@frappe.whitelist()
-def get_promo_code():
-        res = frappe._dict() 
-        coupon_code = frappe.qb.DocType('Coupon Code') 
-        pricing_rule = frappe.qb.DocType('Pricing Rule')
-        coupon_code =(
-        frappe.qb.from_(coupon_code).inner_join(pricing_rule) .on(coupon_code.pricing_rule == pricing_rule.name) 
-        .select(coupon_code.name , coupon_code.coupon_code, coupon_code.pricing_rule,
-        coupon_code.maximum_use, coupon_code.used, coupon_code.description, 
-        pricing_rule.valid_from , pricing_rule.valid_upto, pricing_rule.apply_on, 
-        pricing_rule.price_or_product_discount, pricing_rule.min_qty,
-        pricing_rule.max_qty, pricing_rule.min_amt, pricing_rule.max_amt, 
-        pricing_rule.rate_or_discount, pricing_rule.apply_discount_on, 
-        pricing_rule.discount_amount, pricing_rule.rate, pricing_rule.discount_percentage )
-        .where( (pricing_rule.apply_on == 'Transaction') 
-        & (pricing_rule.rate_or_discount == 'Discount Percentage') &
-        (pricing_rule.apply_discount_on == 'Grand Total') & 
-        (pricing_rule.price_or_product_discount == "Price")
-        )
-        ).run(as_dict=1)
+    image_fields = [
+        "web_logo_image", 
+        "web_banner_image", 
+        "web_outlet_details_banner_image", 
+        "web_footer_logo"
+    ]
+    
+    for field in theme.fields:
+        value = theme_settings.get(field.fieldname)
         
-        if coupon_code:
-                res['success_key'] = 1
-                res['message'] = "success"
-                res['coupon_code'] = coupon_code
-                return res
-        else:
-                res["success_key"] = 0
-                res["message"] = "No Coupon Code in DB"
-                res['coupon_code']= coupon_code
-                return res
-
+        if field.fieldname in image_fields and value:
+            if not value.startswith(instance_url):
+                value = f"{instance_url.rstrip('/')}/{value.lstrip('/')}"
+        
+        theme_settings_dict[field.fieldname] = value
+    currency = frappe.get_doc("Global Defaults").default_currency
+    currency_symbol=frappe.get_doc("Currency",currency).symbol
+    theme_settings_dict['default_currency']=currency
+    theme_settings_dict['currency_symbol']=currency_symbol    
+    theme_settings_dict['default_company']=frappe.get_doc("Global Defaults").default_company    
+    res = {
+        "data": theme_settings_dict
+    }
+    return res
 
 @frappe.whitelist(allow_guest=True)
 def get_theme_settings():
     theme_settings = frappe.get_doc("Theme Settings")
     theme_settings_dict = {}
     theme = frappe.get_meta("Theme Settings")
-    for field in theme.fields:
-        # if field.fieldtype == "Color":
-        theme_settings_dict[field.fieldname] = theme_settings.get(field.fieldname)
+    
+    nbpos_setting = frappe.get_doc("nbpos Setting")
+    instance_url = nbpos_setting.base_url
 
+    image_fields = [
+        "app_background_image", 
+        "merchant_background_image", 
+        "banner_image"
+    ]
+    
+    for field in theme.fields:
+        value = theme_settings.get(field.fieldname)
+        
+        if field.fieldname in image_fields and value:
+            if not value.startswith(instance_url):
+                value = f"{instance_url.rstrip('/')}/{value.lstrip('/')}"
+        
+        theme_settings_dict[field.fieldname] = value
     currency = frappe.get_doc("Global Defaults").default_currency
     currency_symbol=frappe.get_doc("Currency",currency).symbol
     theme_settings_dict['default_currency']=currency
@@ -944,14 +1002,47 @@ def review_rating_order():
 @frappe.whitelist()
 def update_status(order_status):
         try:
-                frappe.db.set_value("Kitchen-Kds", {"order_id":order_status.get('name')}, {'status': order_status.get('status')
-                })
+                doc=frappe.get_doc("Kitchen-Kds",{"order_id":order_status.get('name')})
+                doc.status= order_status.get('status')
+                doc.save(ignore_permissions=True)
 
+                send_order_ready_email(order_status)
                 return {"success_key":1, "message": "success"}
 
         except Exception as e:
                 return {"success_key":0, "message": e}
-        
+
+def send_order_ready_email(order_status):
+        order = frappe.get_doc("Sales Order", order_status.get('name'))
+        customer = frappe.get_doc("Customer", order.customer)
+        cost_center =order.cost_center
+        restaurant_name = frappe.db.get_value("Cost Center", cost_center, "cost_center_name")
+
+        subject = "Your Order is Ready for Pickup"
+        message = f"""
+        Dear {customer.customer_name}, <br><br>
+
+        Good news! Your order from {restaurant_name} is prepared and ready for pickup. <br><br>
+
+        <b>Order ID</b>: {order.name} <br> <br>
+
+        We look forward to serving you. <br> <br>
+
+        Thank you for choosing {restaurant_name}! <br><br><br>
+
+        Best regards, <br> <br>
+        The {restaurant_name} Team<br><br>
+
+        <b>Disclaimer</b>:
+        Please note that email is auto generated and the inbox is unmonitored. For any cancellation requests or inquiries regarding your order, kindly contact the business directly.
+        """
+        frappe.sendmail(
+                recipients=customer.email_id,
+                subject=subject,
+                message=message,
+                now=True
+        )
+
 
 @frappe.whitelist(allow_guest=True)
 def get_all_location_list():
@@ -964,38 +1055,139 @@ def get_all_location_list():
 
 
 
-@frappe.whitelist()
-def get_kitchen_kds(status):
-        try:
-                start_date = add_to_date(now(), hours=-24)
-                end_date = now()
-                all_order = frappe.db.get_all("Kitchen-Kds", 
-                                filters=[
-                                    ['creation1', 'between', [start_date, end_date]],
-                                    ['status', '=', status]
-                                ], 
-                                fields=['name', 'order_id', 'custom_order_request', 'status', 'estimated_time', 'type', 'creation1', 'source'])
-                order_items_dict = []
-                for orders in all_order:
-                        try:
-                                items = frappe.db.get_all("Sales Order Item", filters={'parent':orders.get("order_id")}, fields=['item_name','qty'])
-                                order_wise_items = {}
-                                order_wise_items['order_id'] = orders.get("order_id")
-                                order_wise_items['creation'] = orders.get("creation1")
-                                order_wise_items['estimated_time'] = orders.get('estimated_time')
-                                order_wise_items["status"] = orders.get('status')
-                                order_wise_items["type"] = orders.get('type')
-                                order_wise_items['items'] = items
-                                order_wise_items['order_request'] = orders.get('custom_order_request')
-                                order_wise_items['source'] = orders.get('source')
-                                order_items_dict.append(order_wise_items)
-                        
-                        except Exception as e:
-                                return {"message": e}
 
-                return order_items_dict
-        except Exception as e:
-                return {"message": e}
+@frappe.whitelist(allow_guest=True)
+def get_kitchen_kds(status, cost_center=None):
+    try:
+
+        start_datetime = add_to_date(now(), hours=-24)
+        end_datetime = now()
+
+        start_datetime_str = str(start_datetime)
+        end_datetime_str = str(end_datetime)
+
+        cost_center_condition = ""
+        if cost_center:
+            cost_center_condition = "AND cost_center = %s"
+
+        all_order = frappe.db.sql(f"""
+            SELECT 
+                name, 
+                order_id, 
+                custom_order_request, 
+                status, 
+                cost_center,                 
+                estimated_time, 
+                type, 
+                CONCAT(creation1, ' ', time) AS creation1, 
+                source
+            FROM `tabKitchen-Kds`
+            WHERE CONCAT(creation1, ' ', time) BETWEEN %s AND %s
+            AND status = %s {cost_center_condition}
+            ORDER BY CONCAT(creation1, ' ', time) DESC
+        """, (start_datetime_str, end_datetime_str, status) + ((cost_center,) if cost_center else ()), as_dict=True)
+
+        for orders in all_order:
+            try:
+               
+                        
+                orders['items'] =grouping_combo_attr(orders.order_id)
+
+            except Exception as e:
+                return {"message": str(e)}
+
+        # frappe.publish_realtime('realtime_update', message=all_order)
+
+        return all_order
+
+    except Exception as e:
+        return {"message": str(e)}
+
+
+def grouping_combo_attr(order_id):
+                query =  """
+                                        SELECT 
+                                        soi.item_code,
+                                        soi.item_name,
+                                        soi.custom_ca_id,
+                                        soi.rate,
+                                        soi.custom_is_combo_item,
+                                        soi.custom_is_attribute_item,
+                                        soi.custom_parent_item,
+                                        soi.qty
+                                        FROM 
+                                        `tabSales Order Item` soi,`tabSales Order` s
+                                        WHERE 
+                                        soi.parent=s.name and 
+                                        soi.parent = %s
+                                        """
+
+                items = frappe.db.sql(query, (order_id,), as_dict=True)
+                                
+                
+                grouped_items = {}
+
+                for item in items:
+                        ca_id = item['custom_ca_id']
+                        parent_item = item['custom_parent_item']
+                        
+                        if ca_id not in grouped_items:
+                                grouped_items[ca_id] = []
+
+                        if parent_item is None:
+
+                                grouped_items[ca_id].append({
+                                "item_code": item["item_code"],
+                                "item_name": item["item_name"],
+                                "custom_ca_id": item["custom_ca_id"],
+                                'price':item['rate'],
+                                "custom_is_combo_item": item["custom_is_combo_item"],
+                                "custom_is_attribute_item": item["custom_is_attribute_item"],
+                                "qty": item["qty"],
+                                "child_items": []
+                                })
+                        
+                for item in items:
+                        ca_id = item['custom_ca_id']
+                        parent_item = item['custom_parent_item']
+                        if parent_item is not None:
+                                for parent in grouped_items.get(ca_id, []):
+                                        if parent["item_code"] == parent_item:
+                                                parent["child_items"].append({
+                                                "item_code": item["item_code"],
+                                                "item_name": item["item_name"],
+                                                'price':item['rate'],
+                                                "custom_ca_id": item["custom_ca_id"],
+                                                "custom_is_combo_item": item["custom_is_combo_item"],
+                                                "custom_is_attribute_item": item["custom_is_attribute_item"],
+                                                "custom_parent_item": item["custom_parent_item"],
+                                                "qty": item["qty"]
+                                                })
+
+
+                output = []
+
+                for items_list in grouped_items.values():
+                        output.extend(items_list)
+                        
+                        
+                return output
+
+
+def after_request(whitelisted, response):
+    try:
+        kdsurl = frappe.db.get_single_value("Web Theme Settings", "kdsurl")
+        if kdsurl:
+            response.headers['Access-Control-Allow-Origin'] = kdsurl
+        else:
+                pass
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS,DELETE,PUT'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "CORS Middleware Error")
+    
+    return response               
 
 
 def get_warehouse_for_cost_center(cost_center):
@@ -1003,12 +1195,12 @@ def get_warehouse_for_cost_center(cost_center):
     return warehouse
 
 
-
-@frappe.whitelist(methods="POST")
-def create_sales_order_kiosk():    
+@frappe.whitelist(allow_guest=True)
+def create_sales_order_kiosk():
     order_list = frappe.request.data
     order_list = json.loads(order_list)
     order_list = order_list["order_list"]
+    
     try:
         frappe.set_user("Administrator")
         res = frappe._dict()
@@ -1019,12 +1211,12 @@ def create_sales_order_kiosk():
         sales_order.custom_order_request = order_list.get("order_request")
         
         if order_list.get("source") == "WEB":
-            phone_no = frappe.db.sql("""SELECT phone FROM `tabContact Phone` WHERE phone = %s """,(order_list.get('mobile')))
+            phone_no = frappe.db.sql("""SELECT phone FROM `tabContact Phone` WHERE phone = %s """, (order_list.get('mobile')))
             if phone_no:
-                 parent = frappe.db.get_value('Contact Phone', {'phone': order_list.get('mobile')}, 'parent')
-                 customer = frappe.db.get_value('Dynamic Link', {'parent': parent, 'link_doctype': 'Customer'}, 'link_name')
-                 if customer:
-                     sales_order.customer = customer
+                parent = frappe.db.get_value('Contact Phone', {'phone': order_list.get('mobile')}, 'parent')
+                customer = frappe.db.get_value('Dynamic Link', {'parent': parent, 'link_doctype': 'Customer'}, 'link_name')
+                if customer:
+                    sales_order.customer = customer
             else:
                 new_customer = frappe.new_doc("Customer")
                 new_customer.customer_name = order_list.get("name")
@@ -1035,11 +1227,10 @@ def create_sales_order_kiosk():
                 new_customer.insert(ignore_permissions=True)
                 sales_order.customer = new_customer.name
         else:
-                sales_order.customer = order_list.get("customer")
+            sales_order.customer = order_list.get("customer")
         
         arr = order_list.get("transaction_date").split(" ")
         sales_order.transaction_date = arr[0]
-        sales_order.transaction_time = arr[1]
         sales_order.delivery_date = order_list.get("delivery_date")
         sales_order = add_items_in_order(sales_order, order_list.get("items"), order_list)
         sales_order.status = order_list.get("status")
@@ -1052,9 +1243,13 @@ def create_sales_order_kiosk():
                 sales_order.custom_gift_card_code = order_list.get("gift_card_code")
                 sales_order.apply_discount_on="Grand Total"
                 sales_order.discount_amount=order_list.get("discount_amount")
+
         sales_order.disable_rounded_total = 1
+        cost_center = order_list.get("cost_center")
         
-        if order_list.get("mode_of_payment") == "Card" or order_list.get("mode_of_payment") == "Credit":
+       
+        # Set custom payment status
+        if order_list.get("mode_of_payment") == "Card":
             sales_order.custom_payment_status = "Pending"
         else:
             sales_order.custom_payment_status = "Paid"
@@ -1073,62 +1268,44 @@ def create_sales_order_kiosk():
                sales_order.custom_loyalty_program = order_list.get("loyalty_program")        
         if order_list.get("pos_opening_shift") :              
                sales_order.custom_pos_shift=order_list.get("pos_opening_shift")
+
         sales_order.save(ignore_permissions=True)
         sales_order.rounded_total=sales_order.grand_total
         if order_list.get("redeem_loyalty_points") == 1 :
                sales_order.outstanding_amount=sales_order.grand_total-sales_order.loyalty_amount
-        
-        sales_order.submit()
-        if order_list.get("gift_card_code"):
-                frappe.db.sql("""
-                        UPDATE `tabSales Order`
-                        SET `grand_total` = %s,
-                        `discount_amount`=%s,
-                        `net_total`=%s
-                        WHERE name = %s
-                """, (sales_order.grand_total -float(order_list.get("discount_amount")) ,float(order_list.get("discount_amount")),sales_order.net_total -float(order_list.get("discount_amount")), sales_order.name))           
-        if order_list.get("gift_card_code"):
-                company_name = frappe.get_doc("Global Defaults").default_company
-                company=frappe.get_doc("Company",company_name)              
-                gift_card_doc = frappe.db.get_value("Gift Card", {"code": order_list.get("gift_card_code")}, ["name", "amount_balance", "amount_used"], as_dict=True)
-                journal_entry = frappe.new_doc("Journal Entry")
-                journal_entry.voucher_type="Journal Entry"
-                journal_entry.company=company.name
-                journal_entry.posting_date=frappe.utils.getdate()	
-                journal_entry.user_remark="customer redeemed the gift card in partial amount that is for $" + str(order_list.get("discount_amount")) + " for the purchase of the good"		
-                journal_entry.append(
-                        "accounts",
-                        {
-                        'account': "Gift card Revenue - " + company.abbr,
-                        'debit_in_account_currency': float(order_list.get("discount_amount")),
-                        'credit_in_account_currency': float(0)
-                        })
-                journal_entry.append(
-                        "accounts",
-                        {
-                        'account': "Sales - " + company.abbr,
-                        'debit_in_account_currency': float(0),
-                        'credit_in_account_currency':float(order_list.get("discount_amount"))
-                })	
-                journal_entry.save(ignore_permissions=True)
-                journal_entry.submit()   
-                frappe.set_value('Gift Card', gift_card_doc.name, 'amount_balance', gift_card_doc.amount_balance - float(order_list.get("discount_amount")))            
-                frappe.set_value('Gift Card', gift_card_doc.name, 'amount_used', gift_card_doc.amount_used + float(order_list.get("discount_amount")))            
-        create_sales_invoice_from_sales_order(sales_order,order_list.get("gift_card_code"),order_list.get("discount_amount"))
-        latest_order = frappe.get_doc('Sales Order', sales_order.name)
-        max_time = max(item['estimated_time'] for item in order_list.get("items"))
 
-        if not order_list.get('source') == "WEB":
-                frappe.get_doc({
-                    "doctype": "Kitchen-Kds",
-                    "order_id": latest_order.get('name'),
-                    "type": order_list.get("type"),
-                    "estimated_time": max_time,
-                    "status": "Open",
-                    "creation1" : order_list.get('transaction_date'),
-                    "custom_order_request": order_list.get('order_request'),
-                    "source": order_list.get('source')
-                }).insert(ignore_permissions=1)
+        sales_order.submit()               
+        # if order_list.get("gift_card_code"):
+        #         frappe.db.sql("""
+        #                 UPDATE `tabSales Order`
+        #                 SET `grand_total` = %s,
+        #                 `discount_amount`=%s,
+        #                 `net_total`=%s
+        #                 WHERE name = %s
+        #         """, (sales_order.grand_total -float(order_list.get("discount_amount")) ,float(order_list.get("discount_amount")),sales_order.net_total -float(order_list.get("discount_amount")), sales_order.name))           
+                  
+        create_sales_invoice_from_sales_order(sales_order,order_list.get("gift_card_code"),order_list.get("discount_amount"))
+
+        latest_order = frappe.get_doc('Sales Order', sales_order.name)
+
+        times = [item.get("estimated_time") for item in order_list.get("items")]
+        times = [time if time is not None else 0 for time in times]
+        max_time = max(times)
+
+        if order_list.get("source") != "WEB":
+            kds=frappe.get_doc({
+                "doctype": "Kitchen-Kds",
+                "order_id": latest_order.get('name'),
+                "type": order_list.get("type"),
+                "estimated_time": max_time,
+                "status": "Open",
+                "creation1": now(),
+                "custom_order_request": order_list.get('order_request'),
+                "source": order_list.get('source'),
+                "cost_center": order_list.get("cost_center")
+            })
+            kds.insert(ignore_permissions=1)
+
 
         res['success_key'] = 1
         res['message'] = "success"
@@ -1136,7 +1313,7 @@ def create_sales_order_kiosk():
             "name": sales_order.name,
             "doc_status": sales_order.docstatus
         }
-        
+
         if frappe.local.response.get("exc_type"):
             del frappe.local.response["exc_type"]
         
@@ -1152,7 +1329,6 @@ def create_sales_order_kiosk():
             "message": str(e)
         }
 
-
 @frappe.whitelist(methods="POST")
 def create_web_sales_invoice():
     import json
@@ -1165,9 +1341,9 @@ def create_web_sales_invoice():
         if data.get('status') == "F":
                 doc = frappe.get_doc("Sales Order", data.get('order_id'))
                 total_time=[]
-                sales_order_items = frappe.db.get_all('Sales Order Item', filters={'parent': doc.name}, fields=['item_name'])
+                sales_order_items = frappe.db.get_all('Sales Order Item', filters={'parent': doc.name}, fields=['item_code'])
                 for item in sales_order_items:
-                        time = frappe.get_value("Item", {"name": item.get('item_name')}, 'custom_estimated_time')
+                        time = frappe.get_value("Item", {"item_code": item.get('item_code')}, 'custom_estimated_time')
                         total_time.append(time)
                 max_time = max(total_time)
 
@@ -1196,7 +1372,7 @@ def create_web_sales_invoice():
                     "name": sales_invoice.name,
                     "doc_status": sales_invoice.docstatus
                 }
-        
+
                 if frappe.local.response.get("exc_type"):
                     del frappe.local.response["exc_type"]
 
@@ -1212,22 +1388,22 @@ def create_web_sales_invoice():
             "message": str(e)
         }
 
-
 @frappe.whitelist()
 def get_sales_order_item_details(order_id=None):
     try:
         if order_id:
                 doc = frappe.get_doc("Sales Order", order_id)
                 address = frappe.db.sql("""
-                        SELECT CONCAT(cost_center_name,",",custom_address,",",custom_location) as address from `tabCost Center`
-                         WHERE name = %s
-                """, (  doc.cost_center ),as_dict=True)
-                item_list = []
+                SELECT CONCAT(cost_center_name, ", ", custom_address, ", ", custom_location) as address 
+                FROM `tabCost Center`
+                WHERE name = %s
+                """, (doc.cost_center,), as_dict=True)
+
+                item_list = grouping_combo_attr(order_id)
                 data = {}
                 max_time = []
                 for item in doc.items:
-                    item_list.append(item.as_dict())
-                    estimated_time =frappe.db.get_value("Item", {"name" : item.item_code}, 'custom_estimated_time')
+                    estimated_time =frappe.db.get_value("Item", {"item_code" : item.item_code}, 'custom_estimated_time')
                     max_time.append(estimated_time)
 
 
@@ -1247,8 +1423,6 @@ def get_sales_order_item_details(order_id=None):
             "success_key": 0,
             "message": str(e)
         }
-
-
 
 
                 
@@ -1403,7 +1577,8 @@ def get_location():
         base_url = frappe.db.get_single_value('nbpos Setting', 'base_url')
         return frappe.db.sql("""
                 SELECT custom_location, custom_address, cost_center_name, name,
-                CONCAT(%(base_url)s, custom_attach_image) AS custom_attach_image
+                CONCAT(%(base_url)s, custom_attach_image) AS custom_attach_image,
+                CONCAT(%(base_url)s, custom_web_outlet_details_banner_image) AS web_outlet_details_banner_image
                 FROM `tabCost Center`
                 WHERE disabled = 0 AND custom_location = %(custom_location)s
                 ORDER BY creation DESC
@@ -1416,10 +1591,30 @@ def get_location():
     else:
         return frappe.db.sql("""
             SELECT Distinct(custom_location)
-            FROM `tabCost Center` WHERE disabled=0 and custom_location is NOT NULL
+            FROM `tabCost Center` WHERE custom_location is NOT NULL and disabled=0
             ORDER BY custom_location ASC;
             """,as_dict=1)
-    
+
+
+
+@frappe.whitelist(allow_guest=True)
+def get_cost_center_by_pin():  
+        body = frappe.local.form_dict
+        pin = body.get("custom_pin")
+        cost_center = body.get("cost_center")
+        
+        if not pin or not cost_center:
+                missing_param = "custom_pin" if not pin else "cost_center"
+                return frappe_response(400, f"{missing_param} is missing")
+
+        custom_pin = frappe.db.get_value("Cost Center",cost_center,'custom_pin')
+        if int(custom_pin) == int(pin):
+                return frappe_response(200, {"is_verified": True})
+        
+        else:
+                return frappe_response(200, {"is_verified": False})
+                
+
 @frappe.whitelist(methods="POST")
 def return_sales_order(sales_invoice):
     try:
@@ -1481,8 +1676,7 @@ def return_sales_order(sales_invoice):
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "return_sales_order Error")
         return {"success_key": 0, "message": "An unexpected error occurred. Please try again later.", "invoice": "", "amount": 0}
-
-                
+    
 @frappe.whitelist()
 def edit_customer():
         customer_detail = frappe.request.data
@@ -1499,11 +1693,24 @@ def edit_customer():
                 update_customer = frappe.get_doc("Customer",customer_detail.get("name"))
                 frappe.db.sql("update `tabContact` set `mobile_no` =%s  where name=%s",(customer_detail.get("mobile_no"), update_customer.customer_primary_contact))
                 update_customer.customer_name = customer_detail.get("customer_name")  
-                update_customer.mobile_no = customer_detail.get("mobile_no")  
-                if customer_detail.get("email_id"):
-                                frappe.db.sql("update `tabContact` set `email_id` =%s  where name=%s",(customer_detail.get("email_id"), update_customer.customer_primary_contact))
-                                update_customer.email_id=customer_detail.get("email_id")
-                update_customer.save(ignore_permissions=True)                
+                update_customer.mobile_no = customer_detail.get("mobile_no")
+                # Check if customer email is not provided or is an empty string
+                if not customer_detail.get("email_id") or customer_detail.get("email_id") == "":
+                        email_id = ""
+                else:
+                        email_id = customer_detail.get("email_id")
+
+                # Update the email_id in the 'tabContact' table
+                frappe.db.sql(
+                "UPDATE `tabContact` SET `email_id` = %s WHERE name = %s",
+                (email_id, update_customer.customer_primary_contact)
+                )
+
+                # Set the email_id in the update_customer object
+                update_customer.email_id = email_id
+
+                # Save the update_customer object with ignore_permissions=True
+                update_customer.save(ignore_permissions=True)               
                 res['success_key'] = 1
                 res['message'] = "Customer updated successfully"
                 res["customer"] ={"name" : customer_detail.get("name") ,
@@ -1512,7 +1719,8 @@ def edit_customer():
                                 "email_id" : customer_detail.get("email_id") 
                                 }
                 return res
-        
+
+
 @frappe.whitelist()
 def coupon_code_details():
     current_date = datetime.now().date()
@@ -1770,6 +1978,7 @@ def create_sales_invoice_from_sales_order(doc,gift_card_code,discount_amount):
         sales_invoice.posting_time = doc.transaction_time
         sales_invoice.due_date = doc.transaction_date        
         sales_invoice.update_stock = 1
+        sales_invoice.posa_pos_opening_shift=doc.custom_pos_shift
         if doc.custom_redeem_loyalty_points:
             sales_invoice.redeem_loyalty_points = doc.custom_redeem_loyalty_points
             sales_invoice.loyalty_points = doc.loyalty_points
@@ -1784,15 +1993,50 @@ def create_sales_invoice_from_sales_order(doc,gift_card_code,discount_amount):
             sales_invoice.grand_total=sales_invoice.grand_total -float(discount_amount)
         sales_invoice.save(ignore_permissions=1)
         sales_invoice.submit()
-        if gift_card_code:
-                frappe.db.sql("""
-                        UPDATE `tabSales Invoice`
-                        SET `grand_total` = %s,
-                        `discount_amount`=%s,
-                        `net_total`=%s,
-                        `outstanding_amount`=%s
-                        WHERE name = %s
-                """, (sales_invoice.grand_total -float(discount_amount),discount_amount,sales_invoice.net_total - float(discount_amount),sales_invoice.outstanding_amount -float(discount_amount), sales_invoice.name))           
+        if doc.custom_gift_card_code:
+                company_name = frappe.get_doc("Global Defaults").default_company
+                company=frappe.get_doc("Company",company_name)             
+                journal_entry = frappe.new_doc("Journal Entry")
+                journal_entry.voucher_type="Journal Entry"
+                journal_entry.company=company.name
+                journal_entry.posting_date=frappe.utils.getdate()	
+                journal_entry.user_remark="customer redeemed the gift card in partial amount that is for $" + str(discount_amount) + " for the purchase of the good"		
+                journal_entry.append(
+                        "accounts",
+                        {
+                        'account': "Gift card Revenue - " + company.abbr,
+                        'debit_in_account_currency': float(discount_amount),
+                        'credit_in_account_currency': float(0),
+                        # 'reference_type':"Sales Invoice",
+                        # 'reference_name':sales_invoice.name,
+                        'party_type':'Customer',
+                        'party':doc.customer
+                        })
+                journal_entry.append(
+                        "accounts",
+                        {
+                        'account': "Sales - " + company.abbr,
+                        'debit_in_account_currency': float(0),
+                        'credit_in_account_currency':float(discount_amount),
+                        # 'reference_type':"Sales Invoice",
+                        # 'reference_name':sales_invoice.name,
+                        'party_type':'Customer',
+                        'party':doc.customer
+                })	
+                journal_entry.save(ignore_permissions=True)
+                journal_entry.submit() 
+                gift_card_doc=frappe.db.get_value("Gift Card", {"code": gift_card_code}, ["name", "amount_balance", "amount_used"], as_dict=True)  
+                frappe.set_value('Gift Card', gift_card_doc.name, 'amount_balance', gift_card_doc.amount_balance - float(discount_amount))            
+                frappe.set_value('Gift Card', gift_card_doc.name, 'amount_used', gift_card_doc.amount_used + float(discount_amount))  
+        # if gift_card_code:
+        #         frappe.db.sql("""
+        #                 UPDATE `tabSales Invoice`
+        #                 SET `grand_total` = %s,
+        #                 `discount_amount`=%s,
+        #                 `net_total`=%s,
+        #                 `outstanding_amount`=%s
+        #                 WHERE name = %s
+        #         """, (sales_invoice.grand_total -float(discount_amount),discount_amount,sales_invoice.net_total - float(discount_amount),sales_invoice.outstanding_amount -float(discount_amount), sales_invoice.name))           
         grand_total=frappe.db.get_value('Sales Invoice', {'name': sales_invoice.name}, 'grand_total')
         if grand_total > 0:
               create_payment_entry(sales_invoice) 
@@ -1833,5 +2077,30 @@ def create_payment_entry(doc):
         payment_entry.submit()
 
 
-           
-   
+@frappe.whitelist()
+def clear_demo_data():
+        res = frappe._dict()
+        company = frappe.db.get_single_value("Global Defaults", "demo_company")
+        try:
+                tdr = frappe.new_doc("Transaction Deletion Record")
+                tdr.company=company
+                tdr.process_in_single_transaction = True
+                tdr.save(ignore_permissions=True)
+                tdr.submit()
+                tdr.start_deletion_tasks()
+                frappe.db.commit()
+                frappe.db.set_single_value("Global Defaults", "demo_company", "")
+                frappe.delete_doc("Company", company, ignore_permissions=True)
+                frappe.db.commit()
+                res['success_key'] = 1
+                res['message'] = "Demo company and transactional data deleted successfully."  
+        except Exception as e:
+                res['success_key'] = 0
+                res['message'] = e 
+        return res
+
+
+
+
+
+
